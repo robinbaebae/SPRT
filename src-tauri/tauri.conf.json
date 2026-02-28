@@ -16,12 +16,13 @@
         "label": "main",
         "title": "SPRT",
         "width": 312,
-        "height": 420,
+        "height": 448,
         "resizable": false,
-        "visible": true,
+        "visible": false,
         "alwaysOnTop": true,
         "titleBarStyle": "Overlay",
-        "hiddenTitle": true
+        "hiddenTitle": true,
+        "skipTaskbar": true
       },
       {
         "label": "popover",

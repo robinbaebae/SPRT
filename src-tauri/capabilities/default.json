@@ -14,6 +14,8 @@
     "notification:allow-is-permission-granted",
     "notification:allow-request-permission",
     "notification:allow-notify",
-    "notification:allow-show"
+    "notification:allow-show",
+    "core:window:allow-start-dragging",
+    "core:window:allow-center"
   ]
 }

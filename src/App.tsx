@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   isPermissionGranted,
   requestPermission,
@@ -55,6 +56,7 @@ interface RateLimitInfo {
 /* ── Helpers ── */
 const WINDOW_MS = 5 * 36e5;
 const f = (n: number) => n >= 1e9 ? (n/1e9).toFixed(1)+"B" : n >= 1e6 ? (n/1e6).toFixed(1)+"M" : n >= 1e3 ? (n/1e3).toFixed(1)+"K" : n.toLocaleString();
+const localDate = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 
 async function notify(title: string, body: string) {
   let ok = await isPermissionGranted();
@@ -192,6 +194,13 @@ function Dashboard() {
   const notifiedReset = useRef(false);
   const notifiedHigh = useRef(false);
 
+  const handleDrag = useCallback((e: React.MouseEvent) => {
+    // Only drag from non-interactive areas (not on glass-section cards)
+    if ((e.target as HTMLElement).closest(".glass-section")) return;
+    e.preventDefault();
+    getCurrentWindow().startDragging();
+  }, []);
+
   const loadStats = useCallback(async () => {
     try {
       const [a, b] = await Promise.all([
@@ -307,20 +316,25 @@ function Dashboard() {
     );
   }
 
-  const today = new Date().toISOString().split("T")[0];
+  const today = localDate(new Date());
 
-  // Merge stats-cache daily data with today's realtime JSONL data
-  const recent7Raw = stats.dailyActivity.slice(-7);
-  const recent7 = recent7Raw.map(d => {
-    if (d.date === today && rt) {
-      return { ...d, messageCount: Math.max(d.messageCount, rt.todayMessages) };
+  // Build a proper last-7-days array (today → 6 days ago), filling gaps with 0
+  const activityMap = new Map(stats.dailyActivity.map(d => [d.date, d]));
+  const recent7: DailyActivity[] = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const key = localDate(d);
+    const cached = activityMap.get(key);
+    if (key === today && rt) {
+      // Today: use max of stats-cache vs realtime JSONL
+      const cachedCount = cached?.messageCount ?? 0;
+      recent7.push({ date: key, messageCount: Math.max(cachedCount, rt.todayMessages), sessionCount: rt.activeSessions, toolCallCount: cached?.toolCallCount ?? 0 });
+    } else if (cached) {
+      recent7.push(cached);
+    } else {
+      recent7.push({ date: key, messageCount: 0, sessionCount: 0, toolCallCount: 0 });
     }
-    return d;
-  });
-  const hasToday = recent7.some(d => d.date === today);
-  if (!hasToday && rt && rt.todayMessages > 0) {
-    recent7.push({ date: today, messageCount: rt.todayMessages, sessionCount: rt.activeSessions, toolCallCount: 0 });
-    if (recent7.length > 7) recent7.shift();
   }
 
   const weekMsgs = rt?.weekMessages ?? recent7.reduce((s, d) => s + d.messageCount, 0);
@@ -328,7 +342,7 @@ function Dashboard() {
   const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
   return (
-    <div className="app">
+    <div className="app" onMouseDown={handleDrag}>
       <div className="drag-bar" />
       <Header planType={rt?.planType} lastUpdated={lastUpdated} clock={clock} />
 
@@ -423,13 +437,15 @@ function Dashboard() {
           <div className="card-label">Last 7 Days · {f(weekMsgs)} messages</div>
           <div className="bars">
             {recent7.map(d => {
-              const h = Math.max((d.messageCount / maxM) * 100, 4);
+              const h = maxM > 0 ? Math.max((d.messageCount / maxM) * 100, d.messageCount > 0 ? 6 : 0) : 0;
               const isNow = d.date === today;
-              const dow = dayNames[new Date(d.date + "T00:00:00").getDay()];
+              const dow = dayNames[new Date(d.date + "T12:00:00").getDay()];
               return (
                 <div className="bar-col" key={d.date} title={`${d.date}: ${d.messageCount.toLocaleString()}`}>
                   <div className="bar-count">{d.messageCount > 0 ? f(d.messageCount) : ""}</div>
-                  <div className={`bar ${isNow ? "today" : ""}`} style={{ height: `${h}%` }} />
+                  <div className="bar-track">
+                    <div className={`bar ${isNow ? "today" : ""}`} style={{ height: `${h}%` }} />
+                  </div>
                   <span className="bar-label">{isNow ? "Today" : dow}</span>
                 </div>
               );

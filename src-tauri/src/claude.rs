@@ -276,7 +276,8 @@ pub fn get_realtime_stats() -> Result<RealtimeStats, String> {
         .collect();
 
     let now = chrono::Utc::now();
-    let today_str = now.format("%Y-%m-%d").to_string();
+    let local_now = chrono::Local::now();
+    let today_str = local_now.format("%Y-%m-%d").to_string();
     let week_ago = now - chrono::Duration::days(7);
     let five_hours_ago = now - chrono::Duration::hours(5);
 
@@ -357,7 +358,8 @@ pub fn get_realtime_stats() -> Result<RealtimeStats, String> {
                 continue;
             }
 
-            let is_today = timestamp_str.starts_with(&today_str);
+            let local_ts = ts.with_timezone(&chrono::Local);
+            let is_today = local_ts.format("%Y-%m-%d").to_string() == today_str;
 
             // Extract usage from message.usage
             if let Some(usage) = entry

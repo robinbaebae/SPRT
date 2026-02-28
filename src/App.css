@@ -49,7 +49,6 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  -webkit-app-region: drag;
   background-color: #d8dce4;
   background-image:
     radial-gradient(ellipse at 20% 0%, rgba(120,140,180,0.3) 0%, transparent 50%),
@@ -71,8 +70,7 @@ body {
 
 /* ── Drag Bar ── */
 .drag-bar {
-  height: 32px;
-  -webkit-app-region: drag;
+  height: 28px;
   flex-shrink: 0;
 }
 
@@ -83,7 +81,6 @@ body {
   align-items: center;
   justify-content: space-between;
   flex-shrink: 0;
-  -webkit-app-region: drag;
 }
 
 .h-left { display: flex; align-items: center; gap: 10px; }
@@ -111,14 +108,14 @@ body {
 .h-titles { display: flex; flex-direction: column; gap: 0; }
 
 .h-name {
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--text);
   letter-spacing: 0.2px;
 }
 
 .h-sub {
-  font-size: 10px;
+  font-size: 8px;
   color: var(--text3);
   font-weight: 500;
   letter-spacing: 0.2px;
@@ -141,10 +138,10 @@ body {
 
 /* ── Scroll ── */
 .scroll {
-  flex: 1; overflow-y: auto;
-  padding: 0 12px 8px;
+  flex: 1;
+  padding: 0 12px;
   display: flex; flex-direction: column; gap: 8px;
-  -webkit-app-region: no-drag;
+  overflow: hidden;
 }
 .scroll::-webkit-scrollbar { width: 0; }
 
@@ -254,7 +251,7 @@ body {
   display: flex;
   align-items: flex-end;
   gap: 4px;
-  height: 48px;
+  height: 80px;
 }
 .bar-col {
   flex: 1;
@@ -262,13 +259,17 @@ body {
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  height: 100%;
+}
+.bar-track {
+  width: 100%;
+  height: 48px;
+  display: flex;
+  align-items: flex-end;
 }
 .bar {
   width: 100%;
   border-radius: 4px;
   min-height: 3px;
-  margin-top: auto;
   background: var(--bar-bg);
   transition: all 0.3s ease;
 }
@@ -294,7 +295,7 @@ body {
 
 /* ── Footer ── */
 .footer {
-  padding: 0 12px 8px;
+  padding: 8px 12px;
   display: flex;
   justify-content: space-between;
   font-size: 8px;
