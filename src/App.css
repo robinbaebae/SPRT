@@ -111,7 +111,7 @@ body {
 .h-titles { display: flex; flex-direction: column; gap: 0; }
 
 .h-name {
-  font-size: 12px;
+  font-size: 9px;
   font-weight: 600;
   color: var(--text);
   letter-spacing: 0.2px;
