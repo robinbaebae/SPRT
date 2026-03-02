@@ -160,12 +160,8 @@ pub fn run() {
                 }
             }
 
-            // Show main dashboard on launch & hide on close (instead of destroy)
+            // Hide main on close (instead of destroy) — don't show on launch (stay in menu bar only)
             if let Some(main_win) = app.get_webview_window("main") {
-                let _ = main_win.center();
-                let _ = main_win.show();
-                let _ = main_win.set_focus();
-
                 let mw = main_win.clone();
                 main_win.on_window_event(move |event| {
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {

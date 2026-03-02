@@ -239,6 +239,7 @@ pub struct RealtimeStats {
     pub rate_limit_tier: String,
     pub today_model_tokens: HashMap<String, u64>,
     pub week_model_tokens: HashMap<String, u64>,
+    pub daily_messages: HashMap<String, u64>,
 }
 
 #[tauri::command]
@@ -262,6 +263,7 @@ pub fn get_realtime_stats() -> Result<RealtimeStats, String> {
             rate_limit_tier,
             today_model_tokens: HashMap::new(),
             week_model_tokens: HashMap::new(),
+            daily_messages: HashMap::new(),
         });
     }
 
@@ -289,15 +291,16 @@ pub fn get_realtime_stats() -> Result<RealtimeStats, String> {
     let mut active_sessions: u64 = 0;
     let mut today_model_tokens: HashMap<String, u64> = HashMap::new();
     let mut week_model_tokens: HashMap<String, u64> = HashMap::new();
+    let mut daily_messages: HashMap<String, u64> = HashMap::new();
 
     for path in &paths {
-        // Only process files modified in the last 48h (not 7 days) for speed
+        // Process files modified in the last 8 days (covers full 7-day chart window)
         let modified = match fs::metadata(path).and_then(|m| m.modified()) {
             Ok(t) => t,
             Err(_) => continue,
         };
         let elapsed_secs = modified.elapsed().unwrap_or_default().as_secs();
-        if elapsed_secs > 2 * 86400 {
+        if elapsed_secs > 8 * 86400 {
             continue;
         }
 
@@ -378,6 +381,9 @@ pub fn get_realtime_stats() -> Result<RealtimeStats, String> {
                     .unwrap_or("unknown");
                 let total_tokens = input + output + cache_read + cache_creation;
 
+                let day_key = local_ts.format("%Y-%m-%d").to_string();
+                *daily_messages.entry(day_key).or_insert(0) += 1;
+
                 week_messages += 1;
                 week_tokens.input += input;
                 week_tokens.output += output;
@@ -408,6 +414,7 @@ pub fn get_realtime_stats() -> Result<RealtimeStats, String> {
         rate_limit_tier,
         today_model_tokens,
         week_model_tokens,
+        daily_messages,
     })
 }
 

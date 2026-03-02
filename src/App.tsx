@@ -34,6 +34,7 @@ interface RealtimeStats {
   rateLimitTier: string;
   todayModelTokens: Record<string, number>;
   weekModelTokens: Record<string, number>;
+  dailyMessages: Record<string, number>;
 }
 interface UsageClaim {
   utilization: number;   // 0.0 - 1.0
@@ -319,22 +320,24 @@ function Dashboard() {
   const today = localDate(new Date());
 
   // Build a proper last-7-days array (today → 6 days ago), filling gaps with 0
+  // Merge stats-cache + realtime dailyMessages (use max of both sources)
   const activityMap = new Map(stats.dailyActivity.map(d => [d.date, d]));
+  const rtDaily = rt?.dailyMessages ?? {};
   const recent7: DailyActivity[] = [];
   for (let i = 6; i >= 0; i--) {
     const d = new Date();
     d.setDate(d.getDate() - i);
     const key = localDate(d);
     const cached = activityMap.get(key);
-    if (key === today && rt) {
-      // Today: use max of stats-cache vs realtime JSONL
-      const cachedCount = cached?.messageCount ?? 0;
-      recent7.push({ date: key, messageCount: Math.max(cachedCount, rt.todayMessages), sessionCount: rt.activeSessions, toolCallCount: cached?.toolCallCount ?? 0 });
-    } else if (cached) {
-      recent7.push(cached);
-    } else {
-      recent7.push({ date: key, messageCount: 0, sessionCount: 0, toolCallCount: 0 });
-    }
+    const cachedCount = cached?.messageCount ?? 0;
+    const realtimeCount = rtDaily[key] ?? 0;
+    const bestCount = Math.max(cachedCount, realtimeCount);
+    recent7.push({
+      date: key,
+      messageCount: bestCount,
+      sessionCount: key === today && rt ? rt.activeSessions : (cached?.sessionCount ?? 0),
+      toolCallCount: cached?.toolCallCount ?? 0,
+    });
   }
 
   const weekMsgs = rt?.weekMessages ?? recent7.reduce((s, d) => s + d.messageCount, 0);
