@@ -277,7 +277,7 @@ function Dashboard() {
   );
 
   if (err || !stats) {
-    const isNoCreds = err?.includes("credentials");
+    const isNoCreds = err?.includes("credentials") || err?.includes("Keychain");
     const isNoData = !err || err.includes("stats-cache");
     return (
       <div className="app">
