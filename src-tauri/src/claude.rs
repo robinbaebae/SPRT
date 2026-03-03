@@ -448,8 +448,8 @@ pub struct RateLimitInfo {
 static RATE_LIMIT_CACHE: LazyLock<Mutex<Option<(Instant, RateLimitInfo)>>> =
     LazyLock::new(|| Mutex::new(None));
 
-/// Read access token from ~/.claude/.credentials.json
-pub fn get_access_token() -> Result<String, String> {
+/// Read access token from ~/.claude/.credentials.json, auto-refreshing if expired.
+pub async fn get_access_token() -> Result<String, String> {
     let creds_path = claude_dir()
         .ok_or("Cannot find home directory")?
         .join(".credentials.json");
@@ -457,12 +457,99 @@ pub fn get_access_token() -> Result<String, String> {
         .map_err(|e| format!("Cannot read credentials: {}", e))?;
     let creds: serde_json::Value = serde_json::from_str(&content)
         .map_err(|e| format!("Cannot parse credentials: {}", e))?;
-    creds
-        .get("claudeAiOauth")
-        .and_then(|o| o.get("accessToken"))
+
+    let oauth = creds.get("claudeAiOauth")
+        .ok_or("No claudeAiOauth in credentials file")?;
+
+    let access_token = oauth.get("accessToken")
         .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .ok_or_else(|| "No access token found in credentials file".to_string())
+        .ok_or("No access token found in credentials file")?;
+
+    // Check if token is still valid (with 5-minute buffer)
+    if let Some(expires_at) = oauth.get("expiresAt").and_then(|v| v.as_u64()) {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        if now_ms + 300_000 < expires_at {
+            // Token still valid
+            return Ok(access_token.to_string());
+        }
+
+        // Token expired or about to expire — try refresh
+        if let Some(refresh_token) = oauth.get("refreshToken").and_then(|v| v.as_str()) {
+            if let Ok(new_token) = refresh_access_token(refresh_token, &creds_path, &creds).await {
+                return Ok(new_token);
+            }
+        }
+    }
+
+    // Fallback: return current token (might work if expiresAt is missing)
+    Ok(access_token.to_string())
+}
+
+const OAUTH_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+const OAUTH_TOKEN_URL: &str = "https://console.anthropic.com/api/oauth/token";
+
+async fn refresh_access_token(
+    refresh_token: &str,
+    creds_path: &std::path::Path,
+    original_creds: &serde_json::Value,
+) -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("HTTP client error: {}", e))?;
+
+    let resp = client
+        .post(OAUTH_TOKEN_URL)
+        .header("content-type", "application/json")
+        .json(&serde_json::json!({
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "client_id": OAUTH_CLIENT_ID,
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("Token refresh failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Token refresh returned {}", resp.status()));
+    }
+
+    let body: serde_json::Value = resp.json().await
+        .map_err(|e| format!("Cannot parse refresh response: {}", e))?;
+
+    let new_access = body.get("access_token")
+        .and_then(|v| v.as_str())
+        .ok_or("No access_token in refresh response")?;
+    let new_refresh = body.get("refresh_token")
+        .and_then(|v| v.as_str())
+        .ok_or("No refresh_token in refresh response")?;
+    let expires_in = body.get("expires_in")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(28800);
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let new_expires_at = now_ms + expires_in * 1000;
+
+    // Update credentials file
+    let mut updated = original_creds.clone();
+    if let Some(oauth) = updated.get_mut("claudeAiOauth").and_then(|o| o.as_object_mut()) {
+        oauth.insert("accessToken".to_string(), serde_json::json!(new_access));
+        oauth.insert("refreshToken".to_string(), serde_json::json!(new_refresh));
+        oauth.insert("expiresAt".to_string(), serde_json::json!(new_expires_at));
+    }
+
+    if let Ok(json_str) = serde_json::to_string_pretty(&updated) {
+        let _ = fs::write(creds_path, json_str);
+    }
+
+    Ok(new_access.to_string())
 }
 
 #[tauri::command]
@@ -480,7 +567,7 @@ pub async fn get_rate_limits(force: Option<bool>) -> Result<RateLimitInfo, Strin
         }
     }
 
-    let token = get_access_token()?;
+    let token = get_access_token().await?;
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))

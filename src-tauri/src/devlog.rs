@@ -426,7 +426,7 @@ fn build_weekly_prompt(daily_logs: &[DevLog]) -> String {
 }
 
 async fn call_claude_api(system: &str, prompt: &str) -> Result<String, String> {
-    let token = claude::get_access_token()?;
+    let token = claude::get_access_token().await?;
 
     let client = reqwest::Client::new();
     let resp = client
