@@ -448,47 +448,8 @@ pub struct RateLimitInfo {
 static RATE_LIMIT_CACHE: LazyLock<Mutex<Option<(Instant, RateLimitInfo)>>> =
     LazyLock::new(|| Mutex::new(None));
 
-/// Read access token from macOS Keychain (primary) or .credentials.json (fallback).
-/// Claude Code refreshes tokens and saves them to Keychain only,
-/// so .credentials.json becomes stale after the first refresh cycle.
+/// Read access token from ~/.claude/.credentials.json
 pub fn get_access_token() -> Result<String, String> {
-    // 1. Try macOS Keychain first (always has the latest token)
-    if let Ok(token) = get_token_from_keychain() {
-        return Ok(token);
-    }
-
-    // 2. Fallback to .credentials.json
-    get_token_from_file()
-}
-
-fn get_token_from_keychain() -> Result<String, String> {
-    use security_framework::passwords::get_generic_password;
-
-    let service = "Claude Code-credentials";
-
-    // Account name is the OS username
-    let account = std::env::var("USER")
-        .unwrap_or_else(|_| "default".to_string());
-
-    let password_bytes = get_generic_password(service, &account)
-        .map_err(|e| format!("Keychain read failed: {}", e))?;
-
-    let raw = std::str::from_utf8(&password_bytes)
-        .map_err(|e| format!("Keychain data is not valid UTF-8: {}", e))?;
-
-    // Extract accessToken directly — the keychain data uses a binary framing
-    // format that isn't pure JSON, so we locate the token by pattern matching.
-    let marker = "\"accessToken\":\"";
-    let start = raw.find(marker)
-        .ok_or("No accessToken found in Keychain data")?;
-    let token_start = start + marker.len();
-    let token_end = raw[token_start..].find('"')
-        .ok_or("Malformed accessToken in Keychain data")?;
-
-    Ok(raw[token_start..token_start + token_end].to_string())
-}
-
-fn get_token_from_file() -> Result<String, String> {
     let creds_path = claude_dir()
         .ok_or("Cannot find home directory")?
         .join(".credentials.json");
@@ -521,7 +482,10 @@ pub async fn get_rate_limits(force: Option<bool>) -> Result<RateLimitInfo, Strin
 
     let token = get_access_token()?;
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("HTTP client error: {}", e))?;
     let resp = client
         .post("https://api.anthropic.com/v1/messages")
         .header("Authorization", format!("Bearer {}", token))

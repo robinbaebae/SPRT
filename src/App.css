@@ -321,10 +321,8 @@ body {
   align-items: center; justify-content: center;
   height: 100vh; gap: 12px;
 }
-.ld-text {
-  font-size: 18px; font-weight: 800;
-  letter-spacing: 3px;
-  color: var(--text3);
+.ld-logo {
+  height: 36px;
   animation: breathe 2s ease infinite;
 }
 @keyframes breathe { 0%,100% { opacity: 0.4; } 50% { opacity: 1; } }

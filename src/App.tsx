@@ -211,6 +211,7 @@ function Dashboard() {
       setStats(a); setRt(b); setStatsErr(null);
       setLastUpdated(new Date());
     } catch (e) { setStatsErr(String(e)); }
+    finally { setLoading(false); }
   }, []);
 
   const loadRateLimits = useCallback(async (force = false) => {
@@ -218,7 +219,6 @@ function Dashboard() {
       const data = await invoke<RateLimitInfo>("get_rate_limits", { force });
       setRl(data);
     } catch {}
-    finally { setLoading(false); }
   }, []);
 
   const updateTray = useCallback((title: string) => {
@@ -270,7 +270,8 @@ function Dashboard() {
     <div className="app">
       <div className="drag-bar"/>
       <div className="center">
-        <div className="ld-text">SPRT</div>
+        <img src={logoBlack} alt="SPRT" className="ld-logo logo-light" />
+        <img src={logoWhite} alt="SPRT" className="ld-logo logo-dark" />
         <div className="ld-sub">Loading...</div>
       </div>
     </div>
