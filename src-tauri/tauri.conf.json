@@ -41,7 +41,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src https://api.anthropic.com https://console.anthropic.com; img-src 'self' asset: https://asset.localhost"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src https://api.anthropic.com https://console.anthropic.com; img-src 'self' asset: https://asset.localhost data:"
     }
   },
   "bundle": {
