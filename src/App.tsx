@@ -188,6 +188,7 @@ function Dashboard() {
   const [rt, setRt] = useState<RealtimeStats | null>(null);
   const [rl, setRl] = useState<RateLimitInfo | null>(null);
   const [statsErr, setStatsErr] = useState<string | null>(null);
+  const [rlErr, setRlErr] = useState(false);
   const [loading, setLoading] = useState(true);
   const [tickCount, tick] = useState(0);
   const [clock, setClock] = useState(() => new Date());
@@ -218,7 +219,8 @@ function Dashboard() {
     try {
       const data = await invoke<RateLimitInfo>("get_rate_limits", { force });
       setRl(data);
-    } catch {}
+      setRlErr(false);
+    } catch { setRlErr(true); }
   }, []);
 
   const updateTray = useCallback((title: string) => {
@@ -278,7 +280,7 @@ function Dashboard() {
   );
 
   // Only block the entire UI if credentials are missing (can't do anything)
-  const isNoCreds = statsErr?.includes("credentials") || statsErr?.includes("Keychain") || statsErr?.includes("home directory");
+  const isNoCreds = statsErr?.includes("credentials") || statsErr?.includes("home directory");
   if (isNoCreds) {
     return (
       <div className="app">
@@ -335,11 +337,15 @@ function Dashboard() {
       <Header planType={rt?.planType} lastUpdated={lastUpdated} clock={clock} />
 
       <div className="scroll">
-        {/* ── Loading Rate Limits ── */}
+        {/* ── Rate Limit Status ── */}
         {!rl && (
           <div className="glass-section">
             <div className="chart-empty">
-              <div className="chart-empty-text">Connecting to Anthropic API...</div>
+              <div className="chart-empty-text">
+                {rlErr
+                  ? "Session token expired. Re-run claude to refresh."
+                  : "Connecting to Anthropic API..."}
+              </div>
             </div>
           </div>
         )}

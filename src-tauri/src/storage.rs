@@ -124,9 +124,3 @@ pub fn list_devlogs(log_type: &str, limit: usize) -> Result<Vec<DevLog>, String>
 
     Ok(logs)
 }
-
-pub fn devlog_exists(date: &str, log_type: &str) -> bool {
-    devlogs_dir(log_type)
-        .map(|dir| dir.join(filename_for_log(date, log_type)).exists())
-        .unwrap_or(false)
-}

@@ -135,21 +135,6 @@ pub fn collect_git_activity(date: &str) -> Vec<GitActivity> {
     activities
 }
 
-/// Collect git activity for a date range (for weekly reports).
-pub fn collect_git_activity_range(since: &str, until: &str) -> Vec<GitActivity> {
-    let projects = discover_project_paths();
-    let mut activities = vec![];
-
-    for (_dir_name, repo_path) in &projects {
-        if let Some(activity) = collect_repo_activity_range(repo_path, since, until) {
-            if !activity.commits.is_empty() {
-                activities.push(activity);
-            }
-        }
-    }
-
-    activities
-}
 
 fn collect_repo_activity(repo_path: &str, date: &str) -> Option<GitActivity> {
     let since = format!("{}T00:00:00", date);
