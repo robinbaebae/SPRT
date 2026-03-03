@@ -130,6 +130,7 @@ export default function App() {
 function Popover() {
   const [rl, setRl] = useState<RateLimitInfo | null>(null);
   const [clock, setClock] = useState(() => new Date());
+  const loadingRef = useRef(false);
 
   useEffect(() => {
     document.documentElement.style.background = "transparent";
@@ -137,19 +138,26 @@ function Popover() {
   }, []);
 
   const load = useCallback(async () => {
+    if (loadingRef.current) return; // prevent concurrent calls
+    loadingRef.current = true;
     try {
       const data = await invoke<RateLimitInfo>("get_rate_limits", { force: false });
       setRl(data);
-    } catch {}
+    } catch (e) { console.error("Popover load error:", e); }
+    finally { loadingRef.current = false; }
   }, []);
 
   useEffect(() => {
     load();
     const a = setInterval(load, 10000);
     const c = setInterval(() => setClock(new Date()), 1000);
-    let u: (() => void) | undefined;
-    listen("claude-data-changed", () => load()).then(fn => { u = fn; });
-    return () => { clearInterval(a); clearInterval(c); u?.(); };
+    // Proper cleanup: await the promise, then call unlisten in cleanup
+    const unlistenPromise = listen("claude-data-changed", () => load());
+    return () => {
+      clearInterval(a);
+      clearInterval(c);
+      unlistenPromise.then(fn => fn());
+    };
   }, [load]);
 
   return (
@@ -195,15 +203,18 @@ function Dashboard() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const notifiedReset = useRef(false);
   const notifiedHigh = useRef(false);
+  const statsLoadingRef = useRef(false);
+  const rlLoadingRef = useRef(false);
 
   const handleDrag = useCallback((e: React.MouseEvent) => {
-    // Only drag from non-interactive areas (not on glass-section cards)
     if ((e.target as HTMLElement).closest(".glass-section")) return;
     e.preventDefault();
     getCurrentWindow().startDragging();
   }, []);
 
   const loadStats = useCallback(async () => {
+    if (statsLoadingRef.current) return; // prevent concurrent calls
+    statsLoadingRef.current = true;
     try {
       const [a, b] = await Promise.all([
         invoke<Stats>("get_stats_cache"),
@@ -212,31 +223,37 @@ function Dashboard() {
       setStats(a); setRt(b); setStatsErr(null);
       setLastUpdated(new Date());
     } catch (e) { setStatsErr(String(e)); }
-    finally { setLoading(false); }
+    finally { setLoading(false); statsLoadingRef.current = false; }
   }, []);
 
   const loadRateLimits = useCallback(async (force = false) => {
+    if (rlLoadingRef.current) return; // prevent concurrent calls
+    rlLoadingRef.current = true;
     try {
       const data = await invoke<RateLimitInfo>("get_rate_limits", { force });
       setRl(data);
       setRlErr(false);
-    } catch { setRlErr(true); }
+    } catch (e) { console.error("Rate limit load error:", e); setRlErr(true); }
+    finally { rlLoadingRef.current = false; }
   }, []);
 
   const updateTray = useCallback((title: string) => {
-    invoke("update_tray_title", { title }).catch(() => {});
+    invoke("update_tray_title", { title }).catch((e) => console.error("Tray update error:", e));
   }, []);
 
   useEffect(() => {
-    loadRateLimits();            // fast: show UI immediately after API call
-    loadStats();                 // heavy: 698 JSONL files, runs in background
+    loadRateLimits();
+    loadStats();
     const a = setInterval(loadStats, 30000);
     const rlInterval = setInterval(() => loadRateLimits(), 60000);
     const b = setInterval(() => tick(t => t + 1), 5000);
     const c = setInterval(() => setClock(new Date()), 1000);
-    let u: (() => void) | undefined;
-    listen("claude-data-changed", () => { loadStats(); loadRateLimits(); }).then(fn => { u = fn; });
-    return () => { clearInterval(a); clearInterval(rlInterval); clearInterval(b); clearInterval(c); u?.(); };
+    // Proper cleanup: await the promise, then call unlisten in cleanup
+    const unlistenPromise = listen("claude-data-changed", () => { loadStats(); loadRateLimits(); });
+    return () => {
+      clearInterval(a); clearInterval(rlInterval); clearInterval(b); clearInterval(c);
+      unlistenPromise.then(fn => fn());
+    };
   }, [loadStats, loadRateLimits]);
 
   useEffect(() => {

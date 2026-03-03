@@ -195,10 +195,12 @@ pub fn run() {
                 }
             });
 
-            // File watcher
+            // File watcher — 2s debounce to prevent freeze during heavy Claude Code usage
             let app_handle = app.handle().clone();
             std::thread::spawn(move || {
                 use notify::{Config, RecursiveMode, Watcher};
+                use std::time::{Duration, Instant};
+
                 let (tx, rx) = std::sync::mpsc::channel();
                 let mut watcher = match notify::RecommendedWatcher::new(tx, Config::default()) {
                     Ok(w) => w,
@@ -209,20 +211,26 @@ pub fn run() {
                 };
 
                 if let Some(cd) = dirs::home_dir().map(|h| h.join(".claude")) {
-                    let sf = cd.join("stats-cache.json");
-                    if sf.exists() {
-                        let _ = watcher.watch(&sf, RecursiveMode::NonRecursive);
-                    }
+                    // Watch parent dir so we catch file creation (stats-cache.json may not exist yet)
+                    let _ = watcher.watch(&cd, RecursiveMode::NonRecursive);
                     let pd = cd.join("projects");
                     if pd.exists() {
                         let _ = watcher.watch(&pd, RecursiveMode::Recursive);
                     }
                 }
 
+                // Debounce: only emit at most once per 2 seconds
+                let mut last_emit = Instant::now() - Duration::from_secs(10);
                 loop {
-                    match rx.recv() {
-                        Ok(_) => { let _ = app_handle.emit("claude-data-changed", ()); }
-                        Err(_) => break,
+                    match rx.recv_timeout(Duration::from_secs(2)) {
+                        Ok(_) => {
+                            if last_emit.elapsed() >= Duration::from_secs(2) {
+                                last_emit = Instant::now();
+                                let _ = app_handle.emit("claude-data-changed", ());
+                            }
+                        }
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
                     }
                 }
             });

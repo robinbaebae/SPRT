@@ -88,133 +88,149 @@ fn claude_dir() -> Option<PathBuf> {
 }
 
 #[tauri::command]
-pub fn get_stats_cache() -> Result<StatsCache, String> {
-    let path = claude_dir()
-        .ok_or("Cannot find home directory")?
-        .join("stats-cache.json");
+pub async fn get_stats_cache() -> Result<StatsCache, String> {
+    tauri::async_runtime::spawn_blocking(|| -> Result<StatsCache, String> {
+        let path = claude_dir()
+            .ok_or("Cannot find home directory")?
+            .join("stats-cache.json");
 
-    let content = match fs::read_to_string(&path) {
-        Ok(c) => c,
-        Err(_) => return Ok(StatsCache::default()),
-    };
+        let content = match fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => return Ok(StatsCache::default()),
+        };
 
-    serde_json::from_str(&content)
-        .map_err(|e| format!("Cannot parse stats-cache.json: {}", e))
+        serde_json::from_str(&content)
+            .map_err(|e| format!("Cannot parse stats-cache.json: {}", e))
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
 }
 
 #[tauri::command]
-pub fn get_active_sessions() -> Result<Vec<SessionInfo>, String> {
-    let claude_dir = claude_dir().ok_or("Cannot find home directory")?;
-    let projects_dir = claude_dir.join("projects");
+pub async fn get_active_sessions() -> Result<Vec<SessionInfo>, String> {
+    tauri::async_runtime::spawn_blocking(|| -> Result<Vec<SessionInfo>, String> {
+        let claude_dir = claude_dir().ok_or("Cannot find home directory")?;
+        let projects_dir = claude_dir.join("projects");
 
-    if !projects_dir.exists() {
-        return Ok(vec![]);
-    }
+        if !projects_dir.exists() {
+            return Ok(vec![]);
+        }
 
-    let mut sessions: Vec<SessionInfo> = Vec::new();
+        let mut sessions: Vec<SessionInfo> = Vec::new();
 
-    let pattern = projects_dir
-        .join("*/*.jsonl")
-        .to_string_lossy()
-        .to_string();
+        let pattern = projects_dir
+            .join("*/*.jsonl")
+            .to_string_lossy()
+            .to_string();
 
-    let paths: Vec<PathBuf> = glob::glob(&pattern)
-        .map_err(|e| format!("Glob error: {}", e))?
-        .filter_map(|p| p.ok())
-        .collect();
+        let paths: Vec<PathBuf> = glob::glob(&pattern)
+            .map_err(|e| format!("Glob error: {}", e))?
+            .filter_map(|p| p.ok())
+            .collect();
 
-    for path in paths {
-        // Only include sessions modified in the last 48 hours
-        if let Ok(modified_time) = fs::metadata(&path).and_then(|m| m.modified()) {
-            let elapsed = modified_time.elapsed().unwrap_or_default();
-            if elapsed.as_secs() > 172800 {
-                continue;
+        for path in paths {
+            if let Ok(modified_time) = fs::metadata(&path).and_then(|m| m.modified()) {
+                let elapsed = modified_time.elapsed().unwrap_or_default();
+                if elapsed.as_secs() > 172800 {
+                    continue;
+                }
+
+                let modified_str = {
+                    let dt: chrono::DateTime<chrono::Utc> = modified_time.into();
+                    dt.to_rfc3339()
+                };
+
+                let project = path
+                    .parent()
+                    .and_then(|p| p.file_name())
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+
+                let session_id = path
+                    .file_stem()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+
+                // BufReader streaming — no full file load into memory
+                let message_count = match fs::File::open(&path) {
+                    Ok(f) => BufReader::new(f).lines().count() as u64,
+                    Err(_) => 0,
+                };
+
+                sessions.push(SessionInfo {
+                    session_id,
+                    project,
+                    message_count,
+                    last_active: modified_str,
+                });
             }
+        }
 
-            let modified_str = {
-                let dt: chrono::DateTime<chrono::Utc> = modified_time.into();
-                dt.to_rfc3339()
-            };
+        sessions.sort_by(|a, b| b.last_active.cmp(&a.last_active));
+        sessions.truncate(20);
 
+        Ok(sessions)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+}
+
+#[tauri::command]
+pub async fn get_project_usage() -> Result<Vec<ProjectUsage>, String> {
+    tauri::async_runtime::spawn_blocking(|| -> Result<Vec<ProjectUsage>, String> {
+        let claude_dir = claude_dir().ok_or("Cannot find home directory")?;
+        let projects_dir = claude_dir.join("projects");
+
+        if !projects_dir.exists() {
+            return Ok(vec![]);
+        }
+
+        let pattern = projects_dir
+            .join("*/*.jsonl")
+            .to_string_lossy()
+            .to_string();
+
+        let mut project_map: HashMap<String, (u64, u64)> = HashMap::new();
+
+        let paths: Vec<PathBuf> = glob::glob(&pattern)
+            .map_err(|e| format!("Glob error: {}", e))?
+            .filter_map(|p| p.ok())
+            .collect();
+
+        for path in paths {
             let project = path
                 .parent()
                 .and_then(|p| p.file_name())
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_default();
 
-            let session_id = path
-                .file_stem()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default();
+            // BufReader streaming — no full file load into memory
+            let msgs = match fs::File::open(&path) {
+                Ok(f) => BufReader::new(f).lines().count() as u64,
+                Err(_) => 0,
+            };
 
-            // Count lines efficiently without reading entire file
-            let content = fs::read_to_string(&path).unwrap_or_default();
-            let message_count = content.lines().count() as u64;
-
-            sessions.push(SessionInfo {
-                session_id,
-                project,
-                message_count,
-                last_active: modified_str,
-            });
+            let entry = project_map.entry(project).or_insert((0, 0));
+            entry.0 += 1;
+            entry.1 += msgs;
         }
-    }
 
-    sessions.sort_by(|a, b| b.last_active.cmp(&a.last_active));
-    sessions.truncate(20);
+        let mut usages: Vec<ProjectUsage> = project_map
+            .into_iter()
+            .map(|(project, (session_count, total_messages))| ProjectUsage {
+                project,
+                session_count,
+                total_messages,
+            })
+            .collect();
 
-    Ok(sessions)
-}
+        usages.sort_by(|a, b| b.total_messages.cmp(&a.total_messages));
+        usages.truncate(10);
 
-#[tauri::command]
-pub fn get_project_usage() -> Result<Vec<ProjectUsage>, String> {
-    let claude_dir = claude_dir().ok_or("Cannot find home directory")?;
-    let projects_dir = claude_dir.join("projects");
-
-    if !projects_dir.exists() {
-        return Ok(vec![]);
-    }
-
-    let pattern = projects_dir
-        .join("*/*.jsonl")
-        .to_string_lossy()
-        .to_string();
-
-    let mut project_map: HashMap<String, (u64, u64)> = HashMap::new();
-
-    let paths: Vec<PathBuf> = glob::glob(&pattern)
-        .map_err(|e| format!("Glob error: {}", e))?
-        .filter_map(|p| p.ok())
-        .collect();
-
-    for path in paths {
-        let project = path
-            .parent()
-            .and_then(|p| p.file_name())
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
-
-        let content = fs::read_to_string(&path).unwrap_or_default();
-        let msgs = content.lines().count() as u64;
-
-        let entry = project_map.entry(project).or_insert((0, 0));
-        entry.0 += 1; // session count
-        entry.1 += msgs; // message count
-    }
-
-    let mut usages: Vec<ProjectUsage> = project_map
-        .into_iter()
-        .map(|(project, (session_count, total_messages))| ProjectUsage {
-            project,
-            session_count,
-            total_messages,
-        })
-        .collect();
-
-    usages.sort_by(|a, b| b.total_messages.cmp(&a.total_messages));
-    usages.truncate(10);
-
-    Ok(usages)
+        Ok(usages)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
 }
 
 // ── Realtime Stats from JSONL parsing ──
@@ -245,179 +261,166 @@ pub struct RealtimeStats {
 }
 
 #[tauri::command]
-pub fn get_realtime_stats() -> Result<RealtimeStats, String> {
-    let claude_dir = claude_dir().ok_or("Cannot find home directory")?;
-    let projects_dir = claude_dir.join("projects");
+pub async fn get_realtime_stats() -> Result<RealtimeStats, String> {
+    tauri::async_runtime::spawn_blocking(|| -> Result<RealtimeStats, String> {
+        let claude_dir = claude_dir().ok_or("Cannot find home directory")?;
+        let projects_dir = claude_dir.join("projects");
 
-    // Read credentials for plan info
-    let creds_path = claude_dir.join(".credentials.json");
-    let (plan_type, rate_limit_tier) = read_credentials(&creds_path);
+        let creds_path = claude_dir.join(".credentials.json");
+        let (plan_type, rate_limit_tier) = read_credentials(&creds_path);
 
-    if !projects_dir.exists() {
-        return Ok(RealtimeStats {
-            last_activity: None,
-            today_messages: 0,
-            today_tokens: TokenUsage::default(),
-            week_messages: 0,
-            week_tokens: TokenUsage::default(),
-            active_sessions: 0,
-            plan_type,
-            rate_limit_tier,
-            today_model_tokens: HashMap::new(),
-            week_model_tokens: HashMap::new(),
-            daily_messages: HashMap::new(),
-        });
-    }
-
-    let pattern = projects_dir
-        .join("*/*.jsonl")
-        .to_string_lossy()
-        .to_string();
-
-    let paths: Vec<PathBuf> = glob::glob(&pattern)
-        .map_err(|e| format!("Glob error: {}", e))?
-        .filter_map(|p| p.ok())
-        .collect();
-
-    let now = chrono::Utc::now();
-    let local_now = chrono::Local::now();
-    let today_str = local_now.format("%Y-%m-%d").to_string();
-    let week_ago = now - chrono::Duration::days(7);
-    let five_hours_ago = now - chrono::Duration::hours(5);
-
-    let mut last_activity: Option<chrono::DateTime<chrono::Utc>> = None;
-    let mut today_messages: u64 = 0;
-    let mut today_tokens = TokenUsage::default();
-    let mut week_messages: u64 = 0;
-    let mut week_tokens = TokenUsage::default();
-    let mut active_sessions: u64 = 0;
-    let mut today_model_tokens: HashMap<String, u64> = HashMap::new();
-    let mut week_model_tokens: HashMap<String, u64> = HashMap::new();
-    let mut daily_messages: HashMap<String, u64> = HashMap::new();
-
-    for path in &paths {
-        // Process files modified in the last 8 days (covers full 7-day chart window)
-        let modified = match fs::metadata(path).and_then(|m| m.modified()) {
-            Ok(t) => t,
-            Err(_) => continue,
-        };
-        let elapsed_secs = modified.elapsed().unwrap_or_default().as_secs();
-        if elapsed_secs > 8 * 86400 {
-            continue;
+        if !projects_dir.exists() {
+            return Ok(RealtimeStats {
+                last_activity: None,
+                today_messages: 0,
+                today_tokens: TokenUsage::default(),
+                week_messages: 0,
+                week_tokens: TokenUsage::default(),
+                active_sessions: 0,
+                plan_type,
+                rate_limit_tier,
+                today_model_tokens: HashMap::new(),
+                week_model_tokens: HashMap::new(),
+                daily_messages: HashMap::new(),
+            });
         }
 
-        // Check if this session had recent activity (for active_sessions count)
-        let modified_dt: chrono::DateTime<chrono::Utc> = modified.into();
-        let session_is_active = modified_dt > five_hours_ago;
-        if session_is_active {
-            active_sessions += 1;
-        }
+        let pattern = projects_dir
+            .join("*/*.jsonl")
+            .to_string_lossy()
+            .to_string();
 
-        // Parse JSONL file
-        let file = match fs::File::open(path) {
-            Ok(f) => f,
-            Err(_) => continue,
-        };
-        let reader = BufReader::new(file);
+        let paths: Vec<PathBuf> = glob::glob(&pattern)
+            .map_err(|e| format!("Glob error: {}", e))?
+            .filter_map(|p| p.ok())
+            .collect();
 
-        for line in reader.lines() {
-            let line = match line {
-                Ok(l) => l,
-                Err(_) => continue,
-            };
-            if line.is_empty() {
-                continue;
-            }
+        let now = chrono::Utc::now();
+        let local_now = chrono::Local::now();
+        let today_str = local_now.format("%Y-%m-%d").to_string();
+        let week_ago = now - chrono::Duration::days(7);
+        let five_hours_ago = now - chrono::Duration::hours(5);
 
-            // Quick check: only parse lines that look like assistant messages with usage
-            if !line.contains("\"type\":\"assistant\"") {
-                continue;
-            }
+        let mut last_activity: Option<chrono::DateTime<chrono::Utc>> = None;
+        let mut today_messages: u64 = 0;
+        let mut today_tokens = TokenUsage::default();
+        let mut week_messages: u64 = 0;
+        let mut week_tokens = TokenUsage::default();
+        let mut active_sessions: u64 = 0;
+        let mut today_model_tokens: HashMap<String, u64> = HashMap::new();
+        let mut week_model_tokens: HashMap<String, u64> = HashMap::new();
+        let mut daily_messages: HashMap<String, u64> = HashMap::new();
 
-            let entry: serde_json::Value = match serde_json::from_str(&line) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-
-            if entry.get("type").and_then(|v| v.as_str()) != Some("assistant") {
-                continue;
-            }
-
-            let timestamp_str = match entry.get("timestamp").and_then(|v| v.as_str()) {
-                Some(s) => s,
-                None => continue,
-            };
-
-            let ts = match timestamp_str.parse::<chrono::DateTime<chrono::Utc>>() {
+        for path in &paths {
+            let modified = match fs::metadata(path).and_then(|m| m.modified()) {
                 Ok(t) => t,
                 Err(_) => continue,
             };
-
-            // Update last activity
-            if last_activity.map_or(true, |la| ts > la) {
-                last_activity = Some(ts);
-            }
-
-            // Check if within this week
-            if ts < week_ago {
+            let elapsed_secs = modified.elapsed().unwrap_or_default().as_secs();
+            if elapsed_secs > 8 * 86400 {
                 continue;
             }
 
-            let local_ts = ts.with_timezone(&chrono::Local);
-            let is_today = local_ts.format("%Y-%m-%d").to_string() == today_str;
+            let modified_dt: chrono::DateTime<chrono::Utc> = modified.into();
+            if modified_dt > five_hours_ago {
+                active_sessions += 1;
+            }
 
-            // Extract usage from message.usage
-            if let Some(usage) = entry
-                .get("message")
-                .and_then(|m| m.get("usage"))
-            {
-                let input = usage.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-                let output = usage.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-                let cache_read = usage.get("cache_read_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-                let cache_creation = usage.get("cache_creation_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+            let file = match fs::File::open(path) {
+                Ok(f) => f,
+                Err(_) => continue,
+            };
+            let reader = BufReader::new(file);
 
-                // Extract model name for per-model tracking
-                let model = entry.get("message")
-                    .and_then(|m| m.get("model"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown");
-                let total_tokens = input + output + cache_read + cache_creation;
+            for line in reader.lines() {
+                let line = match line {
+                    Ok(l) => l,
+                    Err(_) => continue,
+                };
+                if line.is_empty() || !line.contains("\"type\":\"assistant\"") {
+                    continue;
+                }
 
-                let day_key = local_ts.format("%Y-%m-%d").to_string();
-                *daily_messages.entry(day_key).or_insert(0) += 1;
+                let entry: serde_json::Value = match serde_json::from_str(&line) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
 
-                week_messages += 1;
-                week_tokens.input += input;
-                week_tokens.output += output;
-                week_tokens.cache_read += cache_read;
-                week_tokens.cache_creation += cache_creation;
-                *week_model_tokens.entry(model.to_string()).or_insert(0) += total_tokens;
+                if entry.get("type").and_then(|v| v.as_str()) != Some("assistant") {
+                    continue;
+                }
 
-                if is_today {
-                    today_messages += 1;
-                    today_tokens.input += input;
-                    today_tokens.output += output;
-                    today_tokens.cache_read += cache_read;
-                    today_tokens.cache_creation += cache_creation;
-                    *today_model_tokens.entry(model.to_string()).or_insert(0) += total_tokens;
+                let timestamp_str = match entry.get("timestamp").and_then(|v| v.as_str()) {
+                    Some(s) => s,
+                    None => continue,
+                };
+
+                let ts = match timestamp_str.parse::<chrono::DateTime<chrono::Utc>>() {
+                    Ok(t) => t,
+                    Err(_) => continue,
+                };
+
+                if last_activity.map_or(true, |la| ts > la) {
+                    last_activity = Some(ts);
+                }
+
+                if ts < week_ago {
+                    continue;
+                }
+
+                let local_ts = ts.with_timezone(&chrono::Local);
+                let is_today = local_ts.format("%Y-%m-%d").to_string() == today_str;
+
+                if let Some(usage) = entry.get("message").and_then(|m| m.get("usage")) {
+                    let input = usage.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let output = usage.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let cache_read = usage.get("cache_read_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let cache_creation = usage.get("cache_creation_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+
+                    let model = entry.get("message")
+                        .and_then(|m| m.get("model"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
+                    let total_tokens = input + output + cache_read + cache_creation;
+
+                    let day_key = local_ts.format("%Y-%m-%d").to_string();
+                    *daily_messages.entry(day_key).or_insert(0) += 1;
+
+                    week_messages += 1;
+                    week_tokens.input += input;
+                    week_tokens.output += output;
+                    week_tokens.cache_read += cache_read;
+                    week_tokens.cache_creation += cache_creation;
+                    *week_model_tokens.entry(model.to_string()).or_insert(0) += total_tokens;
+
+                    if is_today {
+                        today_messages += 1;
+                        today_tokens.input += input;
+                        today_tokens.output += output;
+                        today_tokens.cache_read += cache_read;
+                        today_tokens.cache_creation += cache_creation;
+                        *today_model_tokens.entry(model.to_string()).or_insert(0) += total_tokens;
+                    }
                 }
             }
         }
-    }
 
-    Ok(RealtimeStats {
-        last_activity: last_activity.map(|t| t.to_rfc3339()),
-        today_messages,
-        today_tokens,
-        week_messages,
-        week_tokens,
-        active_sessions,
-        plan_type,
-        rate_limit_tier,
-        today_model_tokens,
-        week_model_tokens,
-        daily_messages,
+        Ok(RealtimeStats {
+            last_activity: last_activity.map(|t| t.to_rfc3339()),
+            today_messages,
+            today_tokens,
+            week_messages,
+            week_tokens,
+            active_sessions,
+            plan_type,
+            rate_limit_tier,
+            today_model_tokens,
+            week_model_tokens,
+            daily_messages,
+        })
     })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
 }
 
 // ── Plan Usage from Anthropic unified rate limit headers ──
@@ -466,26 +469,25 @@ pub async fn get_access_token() -> Result<String, String> {
         .ok_or("No access token found in credentials file")?;
 
     // Check if token is still valid (with 5-minute buffer)
-    if let Some(expires_at) = oauth.get("expiresAt").and_then(|v| v.as_u64()) {
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
 
+    if let Some(expires_at) = oauth.get("expiresAt").and_then(|v| v.as_u64()) {
         if now_ms + 300_000 < expires_at {
-            // Token still valid
             return Ok(access_token.to_string());
         }
 
-        // Token expired or about to expire — try refresh
+        // Token expired — try refresh, fail fast if it doesn't work
         if let Some(refresh_token) = oauth.get("refreshToken").and_then(|v| v.as_str()) {
-            if let Ok(new_token) = refresh_access_token(refresh_token, &creds_path, &creds).await {
-                return Ok(new_token);
-            }
+            return refresh_access_token(refresh_token, &creds_path, &creds).await;
         }
+
+        return Err("Session token expired. Re-run claude to refresh.".to_string());
     }
 
-    // Fallback: return current token (might work if expiresAt is missing)
+    // No expiresAt field — use token as-is
     Ok(access_token.to_string())
 }
 
@@ -498,7 +500,7 @@ async fn refresh_access_token(
     original_creds: &serde_json::Value,
 ) -> Result<String, String> {
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
+        .timeout(std::time::Duration::from_secs(5))
         .build()
         .map_err(|e| format!("HTTP client error: {}", e))?;
 
@@ -556,13 +558,12 @@ async fn refresh_access_token(
 pub async fn get_rate_limits(force: Option<bool>) -> Result<RateLimitInfo, String> {
     let force = force.unwrap_or(false);
 
-    // Check cache (valid for 60 seconds)
+    // Check cache (valid for 60 seconds) — recover from poisoned mutex
     if !force {
-        if let Ok(cache) = RATE_LIMIT_CACHE.lock() {
-            if let Some((instant, ref info)) = *cache {
-                if instant.elapsed().as_secs() < 60 {
-                    return Ok(info.clone());
-                }
+        let cache = RATE_LIMIT_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((instant, ref info)) = *cache {
+            if instant.elapsed().as_secs() < 60 {
+                return Ok(info.clone());
             }
         }
     }
@@ -627,17 +628,16 @@ pub async fn get_rate_limits(force: Option<bool>) -> Result<RateLimitInfo, Strin
         checked_at: chrono::Utc::now().to_rfc3339(),
     };
 
-    // Update cache
-    if let Ok(mut cache) = RATE_LIMIT_CACHE.lock() {
-        *cache = Some((Instant::now(), info.clone()));
-    }
+    // Update cache — recover from poisoned mutex
+    let mut cache = RATE_LIMIT_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    *cache = Some((Instant::now(), info.clone()));
 
     Ok(info)
 }
 
 /// Read 5h utilization from the in-memory rate limit cache (non-async, for tray thread)
 pub fn get_cached_utilization() -> Option<f64> {
-    let cache = RATE_LIMIT_CACHE.lock().ok()?;
+    let cache = RATE_LIMIT_CACHE.lock().unwrap_or_else(|e| e.into_inner());
     let (_, ref info) = (*cache).as_ref()?;
     info.five_hour.as_ref().map(|c| c.utilization)
 }
@@ -728,7 +728,13 @@ pub fn get_session_summaries(date: &str) -> Vec<SessionSummary> {
                 None => continue,
             };
 
-            if !timestamp_str.starts_with(date) {
+            // Convert UTC timestamp to local timezone before comparing date
+            let ts_utc = match timestamp_str.parse::<chrono::DateTime<chrono::Utc>>() {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+            let local_date = ts_utc.with_timezone(&chrono::Local).format("%Y-%m-%d").to_string();
+            if local_date != date {
                 continue;
             }
 

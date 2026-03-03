@@ -375,7 +375,7 @@ fn build_daily_prompt(
             for c in &g.commits {
                 prompt.push_str(&format!(
                     "- [{}] {} (+{} -{})\n",
-                    &c.hash[..7],
+                    c.hash.get(..7).unwrap_or(&c.hash),
                     c.message,
                     c.insertions,
                     c.deletions
@@ -428,7 +428,10 @@ fn build_weekly_prompt(daily_logs: &[DevLog]) -> String {
 async fn call_claude_api(system: &str, prompt: &str) -> Result<String, String> {
     let token = claude::get_access_token().await?;
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|e| format!("HTTP client error: {}", e))?;
     let resp = client
         .post("https://api.anthropic.com/v1/messages")
         .header("Authorization", format!("Bearer {}", token))

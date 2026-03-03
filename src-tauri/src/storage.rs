@@ -66,7 +66,7 @@ fn devlogs_dir(log_type: &str) -> Option<PathBuf> {
 
 fn filename_for_log(date: &str, log_type: &str) -> String {
     match log_type {
-        "monthly" => format!("{}.json", &date[..7]),
+        "monthly" => format!("{}.json", date.get(..7).unwrap_or(date)),
         _ => format!("{}.json", date),
     }
 }

@@ -1,6 +1,38 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
+
+/// Run a git command with a 10-second timeout to prevent hangs (e.g. on network drives)
+fn run_git_command(args: &[&str], dir: &str) -> Option<std::process::Output> {
+    let mut child = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .ok()?;
+
+    let timeout = Duration::from_secs(10);
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_status)) => {
+                // Process finished — collect output
+                return child.wait_with_output().ok();
+            }
+            Ok(None) => {
+                if start.elapsed() > timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(_) => return None,
+        }
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -96,11 +128,7 @@ pub fn discover_project_paths() -> Vec<(String, String)> {
 
 /// Get current branch for a git repo
 fn get_branch(repo_path: &str) -> String {
-    Command::new("git")
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .current_dir(repo_path)
-        .output()
-        .ok()
+    run_git_command(&["rev-parse", "--abbrev-ref", "HEAD"], repo_path)
         .and_then(|o| {
             if o.status.success() {
                 Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
@@ -143,18 +171,12 @@ fn collect_repo_activity(repo_path: &str, date: &str) -> Option<GitActivity> {
 }
 
 fn collect_repo_activity_range(repo_path: &str, since: &str, until: &str) -> Option<GitActivity> {
-    // Get commits with stats
-    let output = Command::new("git")
-        .args([
-            "log",
-            &format!("--since={}", since),
-            &format!("--until={}", until),
-            "--format=%H|%s|%an|%aI",
-            "--shortstat",
-        ])
-        .current_dir(repo_path)
-        .output()
-        .ok()?;
+    let since_arg = format!("--since={}", since);
+    let until_arg = format!("--until={}", until);
+    let output = run_git_command(
+        &["log", &since_arg, &until_arg, "--format=%H|%s|%an|%aI", "--shortstat"],
+        repo_path,
+    )?;
 
     if !output.status.success() {
         return None;
