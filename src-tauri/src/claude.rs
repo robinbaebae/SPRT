@@ -352,7 +352,7 @@ pub fn get_realtime_stats() -> Result<RealtimeStats, String> {
             };
 
             // Update last activity
-            if last_activity.is_none() || ts > last_activity.unwrap() {
+            if last_activity.map_or(true, |la| ts > la) {
                 last_activity = Some(ts);
             }
 

@@ -200,8 +200,13 @@ pub fn run() {
             std::thread::spawn(move || {
                 use notify::{Config, RecursiveMode, Watcher};
                 let (tx, rx) = std::sync::mpsc::channel();
-                let mut watcher =
-                    notify::RecommendedWatcher::new(tx, Config::default()).unwrap();
+                let mut watcher = match notify::RecommendedWatcher::new(tx, Config::default()) {
+                    Ok(w) => w,
+                    Err(e) => {
+                        eprintln!("Failed to create file watcher: {e}");
+                        return;
+                    }
+                };
 
                 if let Some(cd) = dirs::home_dir().map(|h| h.join(".claude")) {
                     let sf = cd.join("stats-cache.json");

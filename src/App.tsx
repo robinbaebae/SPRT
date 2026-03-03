@@ -458,7 +458,7 @@ function Dashboard() {
       </div>
 
       <div className="footer">
-        <span>SPRT v0.2</span>
+        <span>SPRT v0.2.0</span>
         <span>{fmtClock(clock)}</span>
       </div>
     </div>

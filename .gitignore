@@ -23,3 +23,6 @@ src-tauri/target
 *.njsproj
 *.sln
 *.sw?
+
+# Internal notes
+WORK_NOTES.md
