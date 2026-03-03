@@ -187,7 +187,7 @@ function Dashboard() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [rt, setRt] = useState<RealtimeStats | null>(null);
   const [rl, setRl] = useState<RateLimitInfo | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  const [statsErr, setStatsErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [tickCount, tick] = useState(0);
   const [clock, setClock] = useState(() => new Date());
@@ -208,9 +208,9 @@ function Dashboard() {
         invoke<Stats>("get_stats_cache"),
         invoke<RealtimeStats>("get_realtime_stats"),
       ]);
-      setStats(a); setRt(b); setErr(null);
+      setStats(a); setRt(b); setStatsErr(null);
       setLastUpdated(new Date());
-    } catch (e) { setErr(String(e)); }
+    } catch (e) { setStatsErr(String(e)); }
   }, []);
 
   const loadRateLimits = useCallback(async (force = false) => {
@@ -276,40 +276,24 @@ function Dashboard() {
     </div>
   );
 
-  if (err || !stats) {
-    const isNoCreds = err?.includes("credentials") || err?.includes("Keychain");
-    const isNoData = !err || err.includes("stats-cache");
+  // Only block the entire UI if credentials are missing (can't do anything)
+  const isNoCreds = statsErr?.includes("credentials") || statsErr?.includes("Keychain") || statsErr?.includes("home directory");
+  if (isNoCreds) {
     return (
       <div className="app">
         <div className="drag-bar"/>
         <Header planType={rt?.planType} lastUpdated={lastUpdated} clock={clock} />
         <div className="scroll">
           <div className="onboard">
-            <div className="onboard-icon">{isNoCreds ? "🔑" : "📊"}</div>
-            <div className="onboard-title">
-              {isNoCreds ? "Login Required" : "No Data Yet"}
-            </div>
+            <div className="onboard-icon">🔑</div>
+            <div className="onboard-title">Login Required</div>
             <div className="onboard-desc">
-              {isNoCreds
-                ? "Claude Code CLI is not logged in. Please authenticate first."
-                : isNoData
-                ? "No session data found. Start using Claude Code to see your stats here."
-                : err}
+              Claude Code CLI is not logged in. Please authenticate first.
             </div>
             <div className="onboard-steps">
-              {isNoCreds ? (
-                <>
-                  <div className="onboard-step">1. Open Terminal</div>
-                  <div className="onboard-step">2. Run <code>claude</code></div>
-                  <div className="onboard-step">3. Follow the login prompts</div>
-                </>
-              ) : isNoData ? (
-                <>
-                  <div className="onboard-step">1. Install Claude Code: <code>npm i -g @anthropic-ai/claude-code</code></div>
-                  <div className="onboard-step">2. Run <code>claude</code> in any project</div>
-                  <div className="onboard-step">3. Stats will appear automatically</div>
-                </>
-              ) : null}
+              <div className="onboard-step">1. Open Terminal</div>
+              <div className="onboard-step">2. Run <code>claude</code></div>
+              <div className="onboard-step">3. Follow the login prompts</div>
             </div>
           </div>
         </div>
@@ -321,7 +305,7 @@ function Dashboard() {
 
   // Build a proper last-7-days array (today → 6 days ago), filling gaps with 0
   // Merge stats-cache + realtime dailyMessages (use max of both sources)
-  const activityMap = new Map(stats.dailyActivity.map(d => [d.date, d]));
+  const activityMap = new Map((stats?.dailyActivity ?? []).map(d => [d.date, d]));
   const rtDaily = rt?.dailyMessages ?? {};
   const recent7: DailyActivity[] = [];
   for (let i = 6; i >= 0; i--) {
@@ -350,6 +334,15 @@ function Dashboard() {
       <Header planType={rt?.planType} lastUpdated={lastUpdated} clock={clock} />
 
       <div className="scroll">
+        {/* ── Loading Rate Limits ── */}
+        {!rl && (
+          <div className="glass-section">
+            <div className="chart-empty">
+              <div className="chart-empty-text">Connecting to Anthropic API...</div>
+            </div>
+          </div>
+        )}
+
         {/* ── Current Session (5h) ── */}
         {rl?.fiveHour && (() => {
           const pct = claimPct(rl.fiveHour);
@@ -438,22 +431,28 @@ function Dashboard() {
         {/* ── 7-Day Chart ── */}
         <div className="glass-section">
           <div className="card-label">Last 7 Days · {f(weekMsgs)} messages</div>
-          <div className="bars">
-            {recent7.map(d => {
-              const h = maxM > 0 ? Math.max((d.messageCount / maxM) * 100, d.messageCount > 0 ? 6 : 0) : 0;
-              const isNow = d.date === today;
-              const dow = dayNames[new Date(d.date + "T12:00:00").getDay()];
-              return (
-                <div className="bar-col" key={d.date} title={`${d.date}: ${d.messageCount.toLocaleString()}`}>
-                  <div className="bar-count">{d.messageCount > 0 ? f(d.messageCount) : ""}</div>
-                  <div className="bar-track">
-                    <div className={`bar ${isNow ? "today" : ""}`} style={{ height: `${h}%` }} />
+          {weekMsgs === 0 ? (
+            <div className="chart-empty">
+              <div className="chart-empty-text">Start using Claude Code to see your activity here.</div>
+            </div>
+          ) : (
+            <div className="bars">
+              {recent7.map(d => {
+                const h = maxM > 0 ? Math.max((d.messageCount / maxM) * 100, d.messageCount > 0 ? 6 : 0) : 0;
+                const isNow = d.date === today;
+                const dow = dayNames[new Date(d.date + "T12:00:00").getDay()];
+                return (
+                  <div className="bar-col" key={d.date} title={`${d.date}: ${d.messageCount.toLocaleString()}`}>
+                    <div className="bar-count">{d.messageCount > 0 ? f(d.messageCount) : ""}</div>
+                    <div className="bar-track">
+                      <div className={`bar ${isNow ? "today" : ""}`} style={{ height: `${h}%` }} />
+                    </div>
+                    <span className="bar-label">{isNow ? "Today" : dow}</span>
                   </div>
-                  <span className="bar-label">{isNow ? "Today" : dow}</span>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
 

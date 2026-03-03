@@ -8,7 +8,7 @@ use std::time::Instant;
 
 // ── Stats Cache (from ~/.claude/stats-cache.json) ──
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct StatsCache {
     pub version: Option<u32>,
@@ -93,8 +93,10 @@ pub fn get_stats_cache() -> Result<StatsCache, String> {
         .ok_or("Cannot find home directory")?
         .join("stats-cache.json");
 
-    let content = fs::read_to_string(&path)
-        .map_err(|e| format!("Cannot read stats-cache.json: {}", e))?;
+    let content = match fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return Ok(StatsCache::default()),
+    };
 
     serde_json::from_str(&content)
         .map_err(|e| format!("Cannot parse stats-cache.json: {}", e))

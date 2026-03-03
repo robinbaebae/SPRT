@@ -247,6 +247,16 @@ body {
   margin-bottom: 6px;
 }
 
+.chart-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 80px;
+}
+.chart-empty-text {
+  font-size: 11px;
+  opacity: 0.5;
+}
 .bars {
   display: flex;
   align-items: flex-end;
